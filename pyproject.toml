@@ -1,0 +1,26 @@
+[project]
+name = "voicehero"
+version = "0.1.0"
+description = "Voice-to-text transcription CLI using OpenAI's Whisper model"
+readme = "README.md"
+authors = [
+    { name = "Danny Eldridge", email = "github@dananon.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "typer[all]>=0.12.0",
+    "rich>=13.7.0",
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.26.0",
+    "pyperclip>=1.8.2",
+    "pynput>=1.7.6",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+voicehero = "voicehero.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.8.21,<0.9.0"]
+build-backend = "uv_build"
