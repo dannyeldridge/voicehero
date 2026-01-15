@@ -5,6 +5,9 @@ import subprocess
 import sys
 import time
 
+# Print immediately before heavy imports
+print("Initializing VoiceHero...")
+
 import numpy as np
 import pyperclip
 import typer
@@ -31,8 +34,15 @@ def check_macos() -> None:
         raise typer.Exit(1)
 
 
-def auto_paste() -> None:
-    """Paste clipboard contents using AppleScript."""
+def auto_paste(debug: bool = False) -> bool:
+    """Paste clipboard contents using AppleScript.
+
+    Args:
+        debug: If True, show detailed error information
+
+    Returns:
+        True if paste succeeded, False otherwise
+    """
     try:
         # Give the system a moment to ensure clipboard is ready
         time.sleep(0.3)
@@ -53,11 +63,21 @@ def auto_paste() -> None:
 
         # Additional delay to let the paste complete
         time.sleep(0.15)
+        return True
 
     except Exception as e:
-        console.print(f"[yellow]⚠️  Auto-paste failed: {e}[/yellow]")
+        console.print(f"[yellow]⚠️  Auto-paste failed[/yellow]")
         console.print("[dim]Text is still in clipboard - you can paste manually with Cmd+V[/dim]")
         console.print("[dim]Note: Terminal needs Accessibility permissions in System Settings[/dim]")
+
+        if debug:
+            console.print(f"[dim]Error details: {type(e).__name__}: {e}[/dim]")
+            if hasattr(e, 'stderr') and e.stderr:
+                console.print(f"[dim]stderr: {e.stderr}[/dim]")
+            if hasattr(e, 'stdout') and e.stdout:
+                console.print(f"[dim]stdout: {e.stdout}[/dim]")
+
+        return False
 
 
 def run(
@@ -125,7 +145,8 @@ def run(
 
     if debug:
         recordings_dir = get_recordings_dir()
-        console.print(f"[dim]🐛 DEBUG MODE: Recordings will be saved to {recordings_dir}[/dim]\n")
+        console.print(f"[dim]🐛 DEBUG MODE: Recordings will be saved to {recordings_dir}[/dim]")
+        console.print(f"[dim]   Recordings will be automatically deleted when you exit.[/dim]\n")
 
     console.print(f"[green]🎤 Ready! Hold {' + '.join(config.hotkey)} to record...[/green]\n")
 
@@ -183,8 +204,10 @@ def run(
 
                 # Auto-paste if configured
                 if config.auto_paste:
-                    auto_paste()
-                    console.print("[green]✓ Pasted![/green]\n")
+                    if auto_paste(debug=debug):
+                        console.print("[green]✓ Pasted![/green]\n")
+                    else:
+                        console.print()  # Add newline after error messages
                 else:
                     console.print("[green]✓ Copied to clipboard[/green]\n")
 
@@ -206,7 +229,20 @@ def run(
 
     # Handle Ctrl+C
     def signal_handler(sig, frame):
-        console.print("\n\n[cyan]Goodbye![/cyan]\n")
+        console.print("\n\n[cyan]Goodbye![/cyan]")
+
+        # Clean up debug recordings
+        if debug:
+            recordings_dir = get_recordings_dir()
+            import shutil
+            if recordings_dir.exists():
+                try:
+                    shutil.rmtree(recordings_dir)
+                    console.print(f"[dim]Cleaned up debug recordings from {recordings_dir}[/dim]")
+                except Exception as e:
+                    console.print(f"[yellow]Failed to clean up recordings: {e}[/yellow]")
+
+        console.print()
         listener.stop()
         transcriber.dispose()
         sys.exit(0)

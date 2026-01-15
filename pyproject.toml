@@ -1,6 +1,6 @@
 [project]
 name = "voicehero"
-version = "0.1.0"
+version = "0.1.1"
 description = "Voice-to-text transcription CLI using OpenAI's Whisper model"
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "typer[all]>=0.12.0",
+    "typer>=0.12.0",
     "rich>=13.7.0",
     "faster-whisper>=1.0.0",
     "sounddevice>=0.4.6",
@@ -16,6 +16,7 @@ dependencies = [
     "pyperclip>=1.8.2",
     "pynput>=1.7.6",
     "pydantic>=2.0.0",
+    "scipy>=1.11.0",
 ]
 
 [project.scripts]

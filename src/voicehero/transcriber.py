@@ -1,11 +1,13 @@
 """Whisper transcription functionality."""
 
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
-from faster_whisper import WhisperModel
 from rich.console import Console
+
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel
 
 console = Console()
 
@@ -35,9 +37,13 @@ class AudioTranscriber:
 
     def initialize(self) -> None:
         """Load the Whisper model."""
+        console.print(f"[cyan]Initializing Whisper ({self.model_size})...[/cyan]")
+
+        from faster_whisper import WhisperModel
+
         start_time = time.time()
 
-        console.print(f"[cyan]Loading Whisper model ({self.model_size})...[/cyan]")
+        console.print("[dim](First run may take 10-30s to download model from Hugging Face)[/dim]")
 
         self.model = WhisperModel(
             self.model_size,

@@ -126,8 +126,6 @@ class AudioRecorder:
                 audio_int16 = audio
 
             wavfile.write(filename, self.sample_rate, audio_int16)
-            console.print(f"[dim]Debug: Saved to {filename}[/dim]")
-        except ImportError:
-            console.print("[yellow]scipy not installed, skipping debug save[/yellow]")
+            console.print(f"[dim]Saved recording to {filename.name}[/dim]")
         except Exception as e:
             console.print(f"[yellow]Failed to save debug recording: {e}[/yellow]")
