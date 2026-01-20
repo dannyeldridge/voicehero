@@ -17,7 +17,7 @@ from rich.panel import Panel
 from .config import get_recordings_dir, load_config
 from .config_cmd import config_command
 from .hotkey import HotkeyListener
-from .recorder import AudioRecorder
+from .recorder import AudioRecorder, get_default_input_device, is_bluetooth_device
 from .transcriber import AudioTranscriber
 
 console = Console()
@@ -148,21 +148,42 @@ def run(
         console.print(f"[dim]🐛 DEBUG MODE: Recordings will be saved to {recordings_dir}[/dim]")
         console.print(f"[dim]   Recordings will be automatically deleted when you exit.[/dim]\n")
 
+    # Check for Bluetooth devices and show warning
+    _, device_info = get_default_input_device()
+    device_name = device_info.get('name', 'Unknown')
+
+    if debug:
+        console.print(f"[dim]📱 Input device: {device_name}[/dim]\n")
+
+    if is_bluetooth_device(device_name):
+        console.print(
+            Panel(
+                "[yellow]🎧 BLUETOOTH DEVICE DETECTED[/yellow]\n\n"
+                f"Input: {device_name}\n\n"
+                "Bluetooth headphones require profile switching to use the microphone.\n"
+                "VoiceHero will automatically activate the microphone on first use.\n\n"
+                "[dim]Note: Audio quality may be lower when the microphone is active.[/dim]",
+                border_style="yellow",
+            )
+        )
+        console.print()
+
     console.print(f"[green]🎤 Ready! Hold {' + '.join(config.hotkey)} to record...[/green]\n")
 
     # State management
     recorder: AudioRecorder | None = None
     is_transcribing = False
+    activated_bluetooth_device: str | None = None  # Track activated Bluetooth device across recordings
 
     def on_start():
-        nonlocal recorder, is_transcribing
+        nonlocal recorder, is_transcribing, activated_bluetooth_device
 
         if is_transcribing:
             return
 
         try:
-            recorder = AudioRecorder(debug=debug)
-            recorder.start()
+            recorder = AudioRecorder(debug=debug, activated_bluetooth_device=activated_bluetooth_device)
+            activated_bluetooth_device = recorder.start()
             console.print("[red]🔴 Recording...[/red]")
         except Exception as e:
             console.print(f"[red]Failed to start recording: {e}[/red]")
