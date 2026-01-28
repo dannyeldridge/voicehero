@@ -101,8 +101,14 @@ class HotkeyListener:
         )
         self.listener.start()
 
-    def stop(self) -> None:
-        """Stop listening for hotkeys."""
+    def stop(self, timeout: float = 1.0) -> None:
+        """Stop listening for hotkeys.
+
+        Args:
+            timeout: Maximum time to wait for listener thread to stop
+        """
         if self.listener:
             self.listener.stop()
+            # Wait for thread to finish with timeout to prevent hanging
+            self.listener.join(timeout=timeout)
             self.listener = None

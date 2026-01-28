@@ -1,5 +1,6 @@
 """Audio recording functionality."""
 
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,42 @@ import sounddevice as sd
 from rich.console import Console
 
 console = Console()
+
+STREAM_TIMEOUT = 2.0  # seconds to wait for stream operations
+
+
+def _run_with_timeout(func, timeout: float, description: str = "operation") -> bool:
+    """Run a function with a timeout.
+
+    Args:
+        func: Function to run
+        timeout: Timeout in seconds
+        description: Description for error messages
+
+    Returns:
+        True if completed successfully, False if timed out
+    """
+    result = {"completed": False, "error": None}
+
+    def wrapper():
+        try:
+            func()
+            result["completed"] = True
+        except Exception as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=wrapper, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if not result["completed"]:
+        if thread.is_alive():
+            console.print(f"[yellow]Warning: {description} timed out[/yellow]")
+            return False
+        elif result["error"]:
+            console.print(f"[yellow]Warning: {description} failed: {result['error']}[/yellow]")
+            return False
+    return True
 
 
 def is_bluetooth_device(device_name: str) -> bool:
@@ -136,8 +173,10 @@ class AudioRecorder:
             )
             test_stream.start()
             time.sleep(0.3)  # Brief delay to allow profile switch
-            test_stream.stop()
-            test_stream.close()
+
+            # Use timeouts to prevent hanging on Bluetooth issues
+            _run_with_timeout(test_stream.stop, STREAM_TIMEOUT, "Bluetooth test stop")
+            _run_with_timeout(test_stream.close, STREAM_TIMEOUT, "Bluetooth test close")
 
             self.activated_bluetooth_device = device_name
 
@@ -193,11 +232,13 @@ class AudioRecorder:
 
         self.recording = False
 
-        # Stop and close the stream
+        # Stop and close the stream with timeout to prevent hanging
         if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+            stream = self.stream
+            self.stream = None  # Clear reference first to prevent re-entry
+
+            _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
+            _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
 
         # Combine all audio chunks
         if not self.audio_data:

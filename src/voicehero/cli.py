@@ -174,6 +174,7 @@ def run(
     recorder: AudioRecorder | None = None
     is_transcribing = False
     activated_bluetooth_device: str | None = None  # Track activated Bluetooth device across recordings
+    session_word_count = 0  # Track total words transcribed in this session
 
     def on_start():
         nonlocal recorder, is_transcribing, activated_bluetooth_device
@@ -189,7 +190,7 @@ def run(
             console.print(f"[red]Failed to start recording: {e}[/red]")
 
     def on_stop():
-        nonlocal recorder, is_transcribing
+        nonlocal recorder, is_transcribing, session_word_count
 
         if not recorder or is_transcribing:
             return
@@ -220,17 +221,27 @@ def run(
                 console.print(f'\n[green]"{text}"[/green]')
                 console.print(f"[dim](transcribed in {elapsed:.1f}s)[/dim]")
 
+                # Count words and update session total
+                word_count = len(text.split())
+                session_word_count += word_count
+
+                # Calculate time saved (40 WPM average typing speed)
+                minutes_saved = session_word_count / 40
+
                 # Copy to clipboard
                 pyperclip.copy(text)
 
                 # Auto-paste if configured
                 if config.auto_paste:
                     if auto_paste(debug=debug):
-                        console.print("[green]✓ Pasted![/green]\n")
+                        console.print("[green]✓ Pasted![/green]")
                     else:
                         console.print()  # Add newline after error messages
                 else:
-                    console.print("[green]✓ Copied to clipboard[/green]\n")
+                    console.print("[green]✓ Copied to clipboard[/green]")
+
+                # Display session stats
+                console.print(f"[dim](Session: {session_word_count} words • ~{minutes_saved:.1f} min saved)[/dim]\n")
 
                 # Save debug recording
                 if debug:
@@ -250,21 +261,33 @@ def run(
 
     # Handle Ctrl+C
     def signal_handler(sig, frame):
+        nonlocal recorder
         console.print("\n\n[cyan]Goodbye![/cyan]")
 
-        # Clean up debug recordings
+        # Stop any active recording first to release file handles
+        if recorder:
+            try:
+                recorder.stop()
+            except Exception:
+                pass  # Ignore errors during shutdown
+            recorder = None
+
+        # Stop hotkey listener with timeout
+        listener.stop()
+
+        # Clean up debug recordings after stopping recorder
         if debug:
             recordings_dir = get_recordings_dir()
             import shutil
             if recordings_dir.exists():
                 try:
-                    shutil.rmtree(recordings_dir)
+                    # Use ignore_errors to prevent hanging on locked files
+                    shutil.rmtree(recordings_dir, ignore_errors=True)
                     console.print(f"[dim]Cleaned up debug recordings from {recordings_dir}[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]Failed to clean up recordings: {e}[/yellow]")
 
         console.print()
-        listener.stop()
         transcriber.dispose()
         sys.exit(0)
 
