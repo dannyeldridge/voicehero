@@ -15,6 +15,13 @@ class VoiceHeroConfig(BaseModel):
     auto_paste: bool = True
 
 
+class VoiceHeroStats(BaseModel):
+    """VoiceHero cumulative statistics."""
+
+    total_words: int = 0
+    total_transcriptions: int = 0
+
+
 def get_config_dir() -> Path:
     """Get the VoiceHero configuration directory."""
     config_dir = Path.home() / ".voicehero"
@@ -53,3 +60,29 @@ def get_recordings_dir() -> Path:
     recordings_dir = get_config_dir() / "recordings"
     recordings_dir.mkdir(exist_ok=True)
     return recordings_dir
+
+
+def get_stats_path() -> Path:
+    """Get the path to the statistics file."""
+    return get_config_dir() / "stats.json"
+
+
+def load_stats() -> VoiceHeroStats:
+    """Load statistics from disk, or return default stats if not found."""
+    stats_path = get_stats_path()
+    if not stats_path.exists():
+        return VoiceHeroStats()
+
+    try:
+        with open(stats_path) as f:
+            data = json.load(f)
+            return VoiceHeroStats(**data)
+    except Exception:
+        return VoiceHeroStats()
+
+
+def save_stats(stats: VoiceHeroStats) -> None:
+    """Save statistics to disk."""
+    stats_path = get_stats_path()
+    with open(stats_path, "w") as f:
+        json.dump(stats.model_dump(), f, indent=2)

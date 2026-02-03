@@ -14,7 +14,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from .config import get_recordings_dir, load_config
+from .config import get_recordings_dir, load_config, load_stats, save_stats
 from .config_cmd import config_command
 from .hotkey import HotkeyListener
 from .recorder import AudioRecorder, get_default_input_device, is_bluetooth_device
@@ -168,6 +168,17 @@ def run(
         )
         console.print()
 
+    # Load statistics
+    stats = load_stats()
+
+    # Display total stats if any exist
+    if stats.total_words > 0:
+        total_minutes_saved = stats.total_words / 40
+        console.print(
+            f"[dim]📊 Total lifetime: {stats.total_transcriptions} transcriptions • "
+            f"{stats.total_words} words • ~{total_minutes_saved:.1f} min saved[/dim]\n"
+        )
+
     console.print(f"[green]🎤 Ready! Hold {' + '.join(config.hotkey)} to record...[/green]\n")
 
     # State management
@@ -225,8 +236,14 @@ def run(
                 word_count = len(text.split())
                 session_word_count += word_count
 
+                # Update and save cumulative stats
+                stats.total_words += word_count
+                stats.total_transcriptions += 1
+                save_stats(stats)
+
                 # Calculate time saved (40 WPM average typing speed)
-                minutes_saved = session_word_count / 40
+                session_minutes_saved = session_word_count / 40
+                total_minutes_saved = stats.total_words / 40
 
                 # Copy to clipboard
                 pyperclip.copy(text)
@@ -240,8 +257,11 @@ def run(
                 else:
                     console.print("[green]✓ Copied to clipboard[/green]")
 
-                # Display session stats
-                console.print(f"[dim](Session: {session_word_count} words • ~{minutes_saved:.1f} min saved)[/dim]\n")
+                # Display session and total stats
+                console.print(
+                    f"[dim](Session: {session_word_count} words • ~{session_minutes_saved:.1f} min saved | "
+                    f"Total: {stats.total_words} words • ~{total_minutes_saved:.1f} min saved)[/dim]\n"
+                )
 
                 # Save debug recording
                 if debug:

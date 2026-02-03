@@ -230,15 +230,17 @@ class AudioRecorder:
         if not self.recording:
             raise RuntimeError("No recording in progress")
 
-        self.recording = False
-
-        # Stop and close the stream with timeout to prevent hanging
+        # Stop and close the stream BEFORE setting recording=False
+        # This ensures all buffered audio chunks are processed by the callback
         if self.stream:
             stream = self.stream
             self.stream = None  # Clear reference first to prevent re-entry
 
             _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
             _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
+
+        # Now set recording to False after stream is stopped
+        self.recording = False
 
         # Combine all audio chunks
         if not self.audio_data:
