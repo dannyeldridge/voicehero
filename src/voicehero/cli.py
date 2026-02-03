@@ -1,5 +1,6 @@
 """Main CLI entry point for VoiceHero."""
 
+import logging
 import signal
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from rich.panel import Panel
 from .config import get_recordings_dir, load_config, load_stats, save_stats
 from .config_cmd import config_command
 from .hotkey import HotkeyListener
+from .logger import init_logger, get_logger
 from .recorder import AudioRecorder, get_default_input_device, is_bluetooth_device
 from .transcriber import AudioTranscriber
 
@@ -81,8 +83,9 @@ def auto_paste(debug: bool = False) -> bool:
 
 
 def run(
-    model: str = typer.Option(None, "--model", "-m", help="Whisper model size (tiny, base, small, medium, large)"),
-    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug mode with extra logging"),
+    model: str,
+    debug: bool,
+    save_recordings: bool,
 ) -> None:
     """Launch voice-to-text transcription."""
     check_macos()
@@ -105,6 +108,18 @@ def run(
 
     # Determine model to use
     model_to_use = model or config.model
+
+    # Initialize logger
+    if debug:
+        log_dir = get_recordings_dir()
+        init_logger(debug=True, log_dir=log_dir)
+        logger = get_logger()
+        logger.info(f"VoiceHero starting in DEBUG mode")
+        logger.info(f"Model: {model_to_use}")
+        logger.info(f"Hotkey: {config.hotkey}")
+        logger.info(f"Auto-paste: {config.auto_paste}")
+    else:
+        init_logger(debug=False)
 
     # Display header
     console.print("\n" + "=" * 60)
@@ -145,8 +160,16 @@ def run(
 
     if debug:
         recordings_dir = get_recordings_dir()
-        console.print(f"[dim]🐛 DEBUG MODE: Recordings will be saved to {recordings_dir}[/dim]")
-        console.print(f"[dim]   Recordings will be automatically deleted when you exit.[/dim]\n")
+        console.print(f"[dim]🐛 DEBUG MODE: Recordings and logs will be saved to {recordings_dir}[/dim]")
+        if save_recordings:
+            console.print(f"[dim]   Audio recordings will be saved.[/dim]")
+        console.print(f"[dim]   Debug files will be automatically deleted when you exit.[/dim]")
+        # Show the actual log file path
+        logger = get_logger()
+        for handler in logger.logger.handlers:
+            if isinstance(handler, logging.FileHandler):
+                console.print(f"[dim]   Log file: {handler.baseFilename}[/dim]")
+        console.print()
 
     # Check for Bluetooth devices and show warning
     _, device_info = get_default_input_device()
@@ -190,7 +213,14 @@ def run(
     def on_start():
         nonlocal recorder, is_transcribing, activated_bluetooth_device
 
+        if debug:
+            logger = get_logger()
+            logger.info(">>> on_start() called")
+            logger.debug(f"State: is_transcribing={is_transcribing}, recorder={recorder is not None}")
+
         if is_transcribing:
+            if debug:
+                logger.debug("Skipping on_start - transcription in progress")
             return
 
         try:
@@ -198,15 +228,26 @@ def run(
             activated_bluetooth_device = recorder.start()
             console.print("[red]🔴 Recording...[/red]")
         except Exception as e:
+            if debug:
+                logger.exception(f"Failed to start recording: {e}")
             console.print(f"[red]Failed to start recording: {e}[/red]")
 
     def on_stop():
         nonlocal recorder, is_transcribing, session_word_count
 
+        if debug:
+            logger = get_logger()
+            logger.info(">>> on_stop() called")
+            logger.debug(f"State: recorder={recorder is not None}, is_transcribing={is_transcribing}")
+
         if not recorder or is_transcribing:
+            if debug:
+                logger.debug(f"Skipping on_stop - recorder={recorder is not None}, is_transcribing={is_transcribing}")
             return
 
         is_transcribing = True
+        if debug:
+            logger.debug("Set is_transcribing=True")
 
         try:
             audio = recorder.stop()
@@ -241,19 +282,30 @@ def run(
                 stats.total_transcriptions += 1
                 save_stats(stats)
 
+                if debug:
+                    logger.info(f"Transcription successful: {word_count} words, session total: {session_word_count}")
+
                 # Calculate time saved (40 WPM average typing speed)
                 session_minutes_saved = session_word_count / 40
                 total_minutes_saved = stats.total_words / 40
 
                 # Copy to clipboard
                 pyperclip.copy(text)
+                if debug:
+                    logger.debug("Text copied to clipboard")
 
                 # Auto-paste if configured
                 if config.auto_paste:
+                    if debug:
+                        logger.debug("Attempting auto-paste")
                     if auto_paste(debug=debug):
                         console.print("[green]✓ Pasted![/green]")
+                        if debug:
+                            logger.debug("Auto-paste successful")
                     else:
                         console.print()  # Add newline after error messages
+                        if debug:
+                            logger.warning("Auto-paste failed")
                 else:
                     console.print("[green]✓ Copied to clipboard[/green]")
 
@@ -263,17 +315,24 @@ def run(
                     f"Total: {stats.total_words} words • ~{total_minutes_saved:.1f} min saved)[/dim]\n"
                 )
 
-                # Save debug recording
-                if debug:
+                # Save recording if requested
+                if save_recordings:
                     recorder_temp = AudioRecorder(debug=debug)
                     recorder_temp.save_debug_recording(audio, get_recordings_dir())
             else:
                 console.print("[yellow]⚠️  No speech detected[/yellow]\n")
+                if debug:
+                    logger.warning("No speech detected in transcription")
 
         except Exception as e:
             console.print(f"[red]Transcription error: {e}[/red]\n")
+            if debug:
+                logger.exception(f"Transcription error: {e}")
         finally:
             is_transcribing = False
+            if debug:
+                logger.debug("Set is_transcribing=False")
+                logger.info(">>> on_stop() completed")
 
     # Start hotkey listener
     listener = HotkeyListener(config.hotkey, on_start=on_start, on_stop=on_stop)
@@ -282,33 +341,52 @@ def run(
     # Handle Ctrl+C
     def signal_handler(sig, frame):
         nonlocal recorder
+
+        if debug:
+            logger = get_logger()
+            logger.info("=== SHUTDOWN INITIATED ===")
+
         console.print("\n\n[cyan]Goodbye![/cyan]")
 
         # Stop any active recording first to release file handles
         if recorder:
+            if debug:
+                logger.debug("Stopping active recorder")
             try:
                 recorder.stop()
-            except Exception:
+            except Exception as e:
+                if debug:
+                    logger.error(f"Error stopping recorder during shutdown: {e}")
                 pass  # Ignore errors during shutdown
             recorder = None
 
         # Stop hotkey listener with timeout
+        if debug:
+            logger.debug("Stopping hotkey listener")
         listener.stop()
 
-        # Clean up debug recordings after stopping recorder
-        if debug:
+        # Clean up debug files after stopping recorder (unless recordings were saved)
+        if debug and not save_recordings:
+            logger.info("Cleaning up debug files")
             recordings_dir = get_recordings_dir()
             import shutil
             if recordings_dir.exists():
                 try:
                     # Use ignore_errors to prevent hanging on locked files
                     shutil.rmtree(recordings_dir, ignore_errors=True)
-                    console.print(f"[dim]Cleaned up debug recordings from {recordings_dir}[/dim]")
+                    console.print(f"[dim]Cleaned up debug files from {recordings_dir}[/dim]")
+                    logger.debug("Debug files cleaned up successfully")
                 except Exception as e:
                     console.print(f"[yellow]Failed to clean up recordings: {e}[/yellow]")
+                    logger.error(f"Failed to clean up debug files: {e}")
 
         console.print()
+        if debug:
+            logger.debug("Disposing transcriber")
         transcriber.dispose()
+
+        if debug:
+            logger.info("=== SHUTDOWN COMPLETE ===")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -343,6 +421,7 @@ def main(
     ctx: typer.Context,
     model: str = typer.Option(None, "--model", "-m", help="Whisper model size (tiny, base, small, medium, large)"),
     debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug mode with extra logging"),
+    save_recordings: bool = typer.Option(False, "--save-recordings", help="Save audio recordings to disk"),
 ) -> None:
     """Voice-to-text transcription using OpenAI's Whisper model."""
     # If a subcommand was invoked, don't run the main function
@@ -350,7 +429,7 @@ def main(
         return
 
     # Otherwise run the transcription
-    run(model=model, debug=debug)
+    run(model=model, debug=debug, save_recordings=save_recordings)
 
 
 app.command(name="config")(config)

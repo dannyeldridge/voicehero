@@ -4,6 +4,8 @@ from typing import Callable
 
 from pynput import keyboard
 
+from .logger import get_logger
+
 
 class HotkeyListener:
     """Listens for hotkey combinations to control recording."""
@@ -78,8 +80,14 @@ class HotkeyListener:
         is_active = self.hotkeys.issubset(self.pressed_keys)
 
         if is_active and not self.was_active:
+            logger = get_logger()
+            logger.info(f"Hotkey PRESSED: {sorted(self.pressed_keys)}")
             self.was_active = True
-            self.on_start()
+            try:
+                self.on_start()
+                logger.debug("on_start() callback completed")
+            except Exception as e:
+                logger.exception(f"Error in on_start() callback: {e}")
 
     def _on_release(self, key) -> None:
         """Handle key release events."""
@@ -90,8 +98,14 @@ class HotkeyListener:
         is_active = self.hotkeys.issubset(self.pressed_keys)
 
         if not is_active and self.was_active:
+            logger = get_logger()
+            logger.info(f"Hotkey RELEASED: {sorted(self.pressed_keys)}")
             self.was_active = False
-            self.on_stop()
+            try:
+                self.on_stop()
+                logger.debug("on_stop() callback completed")
+            except Exception as e:
+                logger.exception(f"Error in on_stop() callback: {e}")
 
     def start(self) -> None:
         """Start listening for hotkeys."""
