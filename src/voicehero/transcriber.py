@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from rich.console import Console
 
+from .logger import get_logger
+
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
 
@@ -70,35 +72,59 @@ class AudioTranscriber:
         Returns:
             Transcribed text
         """
+        logger = get_logger()
+        logger.info("=== TRANSCRIPTION START ===")
+
         if self.model is None:
+            logger.error("Model not initialized")
             raise RuntimeError("Model not initialized. Call initialize() first.")
 
         if len(audio) == 0:
+            logger.warning("Empty audio data provided")
             return ""
+
+        logger.debug(f"Audio input: shape={audio.shape}, dtype={audio.dtype}, length={len(audio)}")
 
         # Ensure audio is float32 and normalized
         if audio.dtype != np.float32:
+            logger.debug(f"Converting audio from {audio.dtype} to float32")
             audio = audio.astype(np.float32)
 
         # Normalize audio to [-1, 1] range if needed
         max_val = np.abs(audio).max()
+        logger.debug(f"Audio max value: {max_val}")
         if max_val > 1.0:
+            logger.debug(f"Normalizing audio (max_val={max_val})")
             audio = audio / max_val
 
         # Transcribe
-        segments, info = self.model.transcribe(
-            audio,
-            language=language,
-            beam_size=5,
-            vad_filter=True,  # Voice activity detection
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-            ),
-        )
+        logger.info(f"Starting Whisper transcription (model={self.model_size}, language={language})")
+        start_time = time.time()
 
-        # Combine all segments into a single text
-        text = " ".join(segment.text.strip() for segment in segments)
-        return text.strip()
+        try:
+            segments, info = self.model.transcribe(
+                audio,
+                language=language,
+                beam_size=5,
+                vad_filter=True,  # Voice activity detection
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                ),
+            )
+
+            # Combine all segments into a single text
+            text = " ".join(segment.text.strip() for segment in segments)
+            text = text.strip()
+
+            elapsed = time.time() - start_time
+            logger.info(f"Transcription completed in {elapsed:.2f}s: {len(text)} chars, {len(text.split())} words")
+            logger.debug(f"Transcribed text: {text[:100]}..." if len(text) > 100 else f"Transcribed text: {text}")
+
+            return text
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.exception(f"Transcription failed after {elapsed:.2f}s: {e}")
+            raise
 
     def dispose(self) -> None:
         """Clean up resources."""

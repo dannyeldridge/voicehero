@@ -10,6 +10,8 @@ Voice-to-text transcription CLI
 - Automatic clipboard copy and optional auto-paste
 - Customizable hotkey combinations
 - Real-time transcription feedback
+- Session and lifetime statistics tracking
+- Optional audio recording saving for debugging
 
 ## Requirements
 
@@ -84,10 +86,17 @@ Then the transcriber starts listening in the background:
 Launch the voice transcriber.
 
 ```bash
-voicehero              # Start with saved config
-voicehero --model base # Override model size
-voicehero --debug      # Show debug output (audio levels, timing)
+voicehero                          # Start with saved config
+voicehero --model base             # Override model size
+voicehero --debug                  # Show debug output (audio levels, timing)
+voicehero --save-recordings        # Save audio recordings to ~/.voicehero/recordings/
+voicehero --debug --save-recordings # Debug mode with recordings preserved
 ```
+
+**Options:**
+- `--model`, `-m` - Whisper model size (tiny, base, small, medium, large)
+- `--debug`, `-d` - Enable debug mode with extra logging and audio metrics
+- `--save-recordings` - Save raw audio recordings to disk for review or debugging (full file paths are clickable in terminal to open in Finder)
 
 #### \`voicehero config\`
 
