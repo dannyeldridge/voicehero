@@ -17,7 +17,7 @@ class VoiceHeroLogger:
             debug: If True, log to file with detailed debug info
             log_dir: Directory to save log files (required if debug=True)
         """
-        self.debug = debug
+        self._debug_mode = debug
         self.log_dir = log_dir
         self.logger = logging.getLogger("voicehero")
         self.logger.setLevel(logging.DEBUG if debug else logging.INFO)

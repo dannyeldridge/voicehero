@@ -82,16 +82,22 @@ def is_bluetooth_device(device_name: str) -> bool:
     return any(indicator in device_lower for indicator in bluetooth_indicators)
 
 
-def get_default_input_device() -> tuple[int | None, dict]:
-    """Get the current default input device, refreshing the device list.
+def get_default_input_device(force_refresh: bool = False) -> tuple[int | None, dict]:
+    """Get the current default input device.
+
+    Args:
+        force_refresh: If True, reinitialize PortAudio to detect new devices
+                       (e.g. Bluetooth connections). Skipped by default to avoid
+                       disrupting CoreAudio for built-in devices.
 
     Returns:
         Tuple of (device_index, device_info_dict)
     """
     try:
-        # Refresh device list to pick up any changes
-        sd._terminate()
-        sd._initialize()
+        if force_refresh:
+            sd._terminate()
+            time.sleep(0.1)
+            sd._initialize()
 
         device_info = sd.query_devices(kind='input')
         device_index = sd.default.device[0]  # Input device index
@@ -155,8 +161,11 @@ class AudioRecorder:
         logger = get_logger()
         logger.debug("activate_bluetooth_device() called")
 
-        # Get current default device (refreshes device list)
-        self.current_device_index, device_info = get_default_input_device()
+        # Get current default device.
+        # Only force-refresh PortAudio if we previously had a Bluetooth device
+        # (to detect if user switched away). Otherwise avoid disrupting CoreAudio.
+        needs_refresh = self.activated_bluetooth_device is not None
+        self.current_device_index, device_info = get_default_input_device(force_refresh=needs_refresh)
         self.current_device_name = device_info.get('name', '')
         device_name = self.current_device_name
 
@@ -217,6 +226,36 @@ class AudioRecorder:
                 console.print(f"[yellow]Warning: Failed to pre-activate Bluetooth: {e}[/yellow]")
             return None
 
+    def _try_start_stream(self, device_index: int | None, device_name: str) -> bool:
+        """Try to create and start an audio input stream.
+
+        Args:
+            device_index: PortAudio device index, or None for system default
+            device_name: Device name for logging
+
+        Returns:
+            True if stream started successfully
+        """
+        logger = get_logger()
+        logger.debug(f"Attempting stream start: device={device_index} ({device_name})")
+        try:
+            self.stream = sd.InputStream(
+                device=device_index,
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype=self.dtype,
+                callback=self._audio_callback,
+            )
+            self.stream.start()
+            self.current_device_index = device_index
+            self.current_device_name = device_name
+            logger.info(f"Stream started on {device_name}")
+            return True
+        except Exception as e:
+            logger.warning(f"Stream start failed on {device_name}: {e}")
+            self.stream = None
+            return False
+
     def start(self) -> Optional[str]:
         """Start recording audio.
 
@@ -238,17 +277,27 @@ class AudioRecorder:
         self.recording = True
         self.start_time = time.time()
 
-        # Create and start the audio stream using the current default device
-        logger.debug(f"Creating audio stream: device={self.current_device_index}, rate={self.sample_rate}Hz, channels={self.channels}")
-        self.stream = sd.InputStream(
-            device=self.current_device_index,
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype=self.dtype,
-            callback=self._audio_callback,
-        )
-        logger.debug("Starting audio stream")
-        self.stream.start()
+        # Try to start the stream, with retry and fallback
+        if not self._try_start_stream(self.current_device_index, self.current_device_name):
+            # Retry after a brief delay to let CoreAudio settle
+            logger.info("Retrying stream start after delay...")
+            time.sleep(0.3)
+
+            # Re-query devices in case indices changed
+            self.current_device_index, device_info = get_default_input_device()
+            self.current_device_name = device_info.get('name', 'Unknown')
+
+            if not self._try_start_stream(self.current_device_index, self.current_device_name):
+                # Final fallback: let PortAudio pick the default device
+                logger.info("Falling back to system default device (device=None)")
+                if not self._try_start_stream(None, "System Default"):
+                    self.recording = False
+                    raise RuntimeError(
+                        "Error starting stream: Internal PortAudio error [PaErrorCode -9986]\n"
+                        "This usually means macOS cannot access the microphone.\n"
+                        "Fix: System Settings → Privacy & Security → Microphone → enable your terminal app"
+                    )
+
         logger.info(f"Recording started successfully on {self.current_device_name}")
 
         if self.debug:

@@ -1,6 +1,7 @@
 """Main CLI entry point for VoiceHero."""
 
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -216,7 +217,17 @@ def run(
         except Exception as e:
             if debug:
                 logger.exception(f"Failed to start recording: {e}")
-            console.print(f"[red]Failed to start recording: {e}[/red]")
+            error_str = str(e)
+            if "9986" in error_str or "Audio Hardware" in error_str or "not Running" in error_str:
+                terminal = os.environ.get("TERM_PROGRAM", "your terminal app")
+                console.print(
+                    f"[red]Microphone access denied.[/red]\n"
+                    f"[yellow]Grant microphone permission to {terminal}:[/yellow]\n"
+                    f"  System Settings → Privacy & Security → Microphone → enable {terminal}\n"
+                    f"  Then restart {terminal}."
+                )
+            else:
+                console.print(f"[red]Failed to start recording: {e}[/red]")
 
     def on_stop():
         nonlocal recorder, is_transcribing, session_word_count

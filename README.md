@@ -86,8 +86,16 @@ Launch the voice transcriber.
 ```bash
 voicehero              # Start with saved config
 voicehero --model base # Override model size
-voicehero --debug      # Show debug output (audio levels, timing)
+voicehero --debug      # Enable debug mode with detailed logging
 ```
+
+**Debug mode** (`--debug` flag):
+- Saves detailed logs to `~/.voicehero/recordings/voicehero-<timestamp>.log`
+- Records all audio input to WAV files for analysis
+- Shows additional console output (audio levels, timing, device info)
+- Logs all events: hotkey presses, recording state, transcription progress
+- Automatically cleans up debug files on exit
+- Useful for diagnosing issues like hanging or audio problems
 
 #### \`voicehero config\`
 
