@@ -18,6 +18,7 @@ from rich.panel import Panel
 
 from .config import get_recordings_dir, load_config, load_stats, save_stats
 from .config_cmd import config_command
+from .convert_cmd import convert
 from .hotkey import HotkeyListener
 from .logger import init_logger, get_logger
 from .recorder import AudioRecorder, get_default_input_device, is_bluetooth_device
@@ -444,6 +445,7 @@ def main(
 
 
 app.command(name="config")(config)
+app.command(name="convert")(convert)
 
 
 if __name__ == "__main__":

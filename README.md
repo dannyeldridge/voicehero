@@ -4,14 +4,15 @@ Voice-to-text transcription CLI
 
 ## Features
 
-- Press-and-hold hotkey to record, release to transcribe
-- Fast transcription with faster-whisper
-- Configurable Whisper model sizes (tiny to large)
-- Automatic clipboard copy and optional auto-paste
-- Customizable hotkey combinations
-- Real-time transcription feedback
-- Session and lifetime statistics tracking
-- Optional audio recording saving for debugging
+- **Live transcription**: Press-and-hold hotkey to record, release to transcribe
+- **File conversion**: Transcribe existing audio files (wav, mp3, m4a, ogg, flac, etc.)
+- **Fast transcription**: Powered by faster-whisper
+- **Configurable models**: Choose from tiny to large Whisper models (quality vs. speed)
+- **Smart clipboard**: Automatic clipboard copy and optional auto-paste
+- **Customizable hotkeys**: Configure any key combination for recording
+- **Real-time feedback**: Live status updates and progress bars
+- **Statistics tracking**: Session and lifetime word count with time saved calculations
+- **Debug mode**: Optional audio recording and detailed logging for troubleshooting
 
 ## Requirements
 
@@ -65,7 +66,9 @@ uv run voicehero
 
 ## Usage
 
-### Start the transcriber
+VoiceHero has two main modes: **live transcription** and **file conversion**.
+
+### Live Transcription
 
 ```bash
 voicehero
@@ -79,11 +82,27 @@ Then the transcriber starts listening in the background:
 3. Release the hotkey to transcribe
 4. The transcribed text is automatically copied to your clipboard (and optionally pasted)
 
+### File Conversion
+
+Transcribe existing audio files:
+
+```bash
+voicehero convert recording.mp3
+voicehero convert meeting.wav --level 5 --output transcript.txt
+```
+
+Perfect for transcribing:
+- Voice memos and recordings
+- Meeting recordings
+- Podcast episodes
+- Video audio tracks
+- Any audio in wav, mp3, m4a, ogg, flac, or other formats
+
 ### Commands
 
-#### \`voicehero\`
+#### `voicehero`
 
-Launch the voice transcriber.
+Launch the live voice transcriber with hotkey activation.
 
 ```bash
 voicehero                          # Start with saved config
@@ -106,7 +125,35 @@ voicehero --debug --save-recordings # Debug mode with recordings preserved
 - Automatically cleans up debug files on exit
 - Useful for diagnosing issues like hanging or audio problems
 
-#### \`voicehero config\`
+#### `voicehero convert`
+
+Transcribe an existing audio file to text.
+
+```bash
+voicehero convert audio.mp3              # Transcribe with default level 3 (small model)
+voicehero convert audio.wav --level 5    # Use level 5 (large model, best accuracy)
+voicehero convert audio.m4a -l 1         # Use level 1 (tiny model, fastest)
+voicehero convert audio.mp3 -o text.txt  # Save output to a file
+```
+
+**Options:**
+- `--level`, `-l` - Model accuracy level 1-5 (default: 3)
+  - Level 1: tiny (~75MB) - Fastest, basic accuracy
+  - Level 2: base (~150MB) - Fast, good accuracy
+  - Level 3: small (~500MB) - Balanced (default)
+  - Level 4: medium (~1.5GB) - Better accuracy, slower
+  - Level 5: large (~3GB) - Best accuracy, slowest
+- `--output`, `-o` - Write transcription to a file
+
+**Supported formats:** wav, mp3, m4a, ogg, flac, webm, mp4, aac, wma (any ffmpeg-compatible format)
+
+**Output:**
+- Prints transcribed text to terminal
+- Copies to clipboard automatically
+- Optionally writes to file with `--output`
+- Shows word count and elapsed time
+
+#### `voicehero config`
 
 Configure voice transcription settings.
 
@@ -128,15 +175,68 @@ Settings are stored in \`~/.voicehero/config.json\`:
 
 ### Model Sizes
 
-| Model | Size | Speed | Accuracy |
-|-------|------|-------|----------|
-| tiny | ~75MB | Fastest | Basic |
-| base | ~150MB | Fast | Good |
-| small | ~500MB | Medium | Better |
-| medium | ~1.5GB | Slower | High |
-| large | ~3GB | Slowest | Best |
-| large-v2 | ~3GB | Slowest | Best (v2) |
-| large-v3 | ~3GB | Slowest | Best (v3) |
+| Model | Size | Speed | Accuracy | Level (convert) |
+|-------|------|-------|----------|-----------------|
+| tiny | ~75MB | Fastest | Basic | 1 |
+| base | ~150MB | Fast | Good | 2 |
+| small | ~500MB | Medium | Better | 3 |
+| medium | ~1.5GB | Slower | High | 4 |
+| large | ~3GB | Slowest | Best | 5 |
+| large-v2 | ~3GB | Slowest | Best (v2) | - |
+| large-v3 | ~3GB | Slowest | Best (v3) | - |
+
+**Note:** Live transcription defaults to `base` for speed, while file conversion defaults to `small` (level 3) for better accuracy since there's no real-time constraint.
+
+## Examples
+
+### Live Transcription Workflow
+```bash
+# First time setup
+voicehero config
+
+# Start transcribing
+voicehero
+
+# Use with different model for better quality
+voicehero --model large
+
+# Debug microphone issues
+voicehero --debug --save-recordings
+```
+
+### File Conversion Workflow
+```bash
+# Quick transcription with defaults
+voicehero convert meeting.mp3
+
+# High-accuracy transcription with output file
+voicehero convert interview.wav --level 5 --output transcript.txt
+
+# Fast transcription of multiple files (bash loop)
+for file in recordings/*.mp3; do
+  voicehero convert "$file" -l 1 -o "transcripts/$(basename "$file" .mp3).txt"
+done
+```
+
+## Troubleshooting
+
+### Microphone not working
+1. Check System Settings → Privacy & Security → Microphone
+2. Enable permissions for your terminal app
+3. Restart your terminal
+
+### Auto-paste not working
+1. Check System Settings → Privacy & Security → Accessibility
+2. Enable permissions for your terminal app
+3. Try running `voicehero config` and disable auto-paste if issues persist
+
+### Bluetooth headset microphone
+VoiceHero automatically detects and activates Bluetooth microphones. The first recording may take a moment while the profile switches from high-quality audio (A2DP) to microphone mode (HSP/HFP).
+
+### No speech detected
+- Ensure you're speaking clearly during recording
+- Try a different model size (smaller models may miss quiet audio)
+- Check microphone levels in System Settings → Sound
 
 ## Development
 

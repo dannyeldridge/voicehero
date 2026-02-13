@@ -161,11 +161,9 @@ class AudioRecorder:
         logger = get_logger()
         logger.debug("activate_bluetooth_device() called")
 
-        # Get current default device.
-        # Only force-refresh PortAudio if we previously had a Bluetooth device
-        # (to detect if user switched away). Otherwise avoid disrupting CoreAudio.
-        needs_refresh = self.activated_bluetooth_device is not None
-        self.current_device_index, device_info = get_default_input_device(force_refresh=needs_refresh)
+        # Always force-refresh PortAudio to detect audio source changes.
+        # This ensures we pick up when the user switches input devices in macOS.
+        self.current_device_index, device_info = get_default_input_device(force_refresh=True)
         self.current_device_name = device_info.get('name', '')
         device_name = self.current_device_name
 

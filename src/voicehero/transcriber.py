@@ -1,7 +1,8 @@
 """Whisper transcription functionality."""
 
 import time
-from typing import TYPE_CHECKING, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 from rich.console import Console
@@ -42,19 +43,59 @@ class AudioTranscriber:
         console.print(f"[cyan]Initializing Whisper ({self.model_size})...[/cyan]")
 
         from faster_whisper import WhisperModel
+        from faster_whisper.utils import _MODELS
 
         start_time = time.time()
 
-        console.print("[dim](First run may take 10-30s to download model from Hugging Face)[/dim]")
+        # Pre-download with visible progress if not already cached.
+        # faster_whisper silences tqdm internally (disabled_tqdm), so we
+        # call huggingface_hub.snapshot_download ourselves first.
+        model_path = self._ensure_model_downloaded(self.model_size, _MODELS)
 
         self.model = WhisperModel(
-            self.model_size,
+            model_path,
             device=self.device,
             compute_type=self.compute_type,
         )
 
         elapsed = time.time() - start_time
         console.print(f"[green]✓ Model loaded in {elapsed:.1f}s[/green]\n")
+
+    @staticmethod
+    def _ensure_model_downloaded(model_size: str, models_map: dict[str, str]) -> str:
+        """Download the model with visible progress if not cached, return its path."""
+        import huggingface_hub
+
+        repo_id = models_map.get(model_size)
+        if repo_id is None:
+            # Not a known size name — treat as a direct repo ID or local path
+            return model_size
+
+        allow_patterns = [
+            "config.json",
+            "model.bin",
+            "tokenizer.json",
+            "vocabulary.*",
+        ]
+
+        # Check if already cached (fast, no network)
+        try:
+            path = huggingface_hub.snapshot_download(
+                repo_id,
+                allow_patterns=allow_patterns,
+                local_files_only=True,
+            )
+            return path
+        except FileNotFoundError:
+            pass
+
+        # Not cached — download with progress visible
+        console.print(f"[dim]Downloading {repo_id} from Hugging Face (first time only)...[/dim]")
+        path = huggingface_hub.snapshot_download(
+            repo_id,
+            allow_patterns=allow_patterns,
+        )
+        return path
 
     def transcribe(
         self,
@@ -125,6 +166,51 @@ class AudioTranscriber:
             elapsed = time.time() - start_time
             logger.exception(f"Transcription failed after {elapsed:.2f}s: {e}")
             raise
+
+    def transcribe_file_with_progress(
+        self,
+        file_path: str | Path,
+        language: str = "en",
+        progress_callback: Callable[[float, float], None] | None = None,
+    ) -> str:
+        """Transcribe an audio file to text with progress reporting.
+
+        Args:
+            file_path: Path to the audio file (wav, mp3, m4a, ogg, flac, etc.)
+            language: Language code
+            progress_callback: Called with (current_seconds, total_seconds) as segments complete
+
+        Returns:
+            Transcribed text
+        """
+        logger = get_logger()
+        logger.info(f"=== FILE TRANSCRIPTION START: {file_path} ===")
+
+        if self.model is None:
+            raise RuntimeError("Model not initialized. Call initialize() first.")
+
+        segments_gen, info = self.model.transcribe(
+            str(file_path),
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+        )
+
+        total_duration = info.duration
+        logger.info(f"Audio duration: {total_duration:.1f}s")
+
+        parts: list[str] = []
+        for segment in segments_gen:
+            text = segment.text.strip()
+            if text:
+                parts.append(text)
+            if progress_callback is not None:
+                progress_callback(segment.end, total_duration)
+
+        result = " ".join(parts).strip()
+        logger.info(f"File transcription completed: {len(result)} chars, {len(result.split())} words")
+        return result
 
     def dispose(self) -> None:
         """Clean up resources."""

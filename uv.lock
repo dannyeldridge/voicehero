@@ -1307,7 +1307,7 @@ wheels = [
 
 [[package]]
 name = "voicehero"
-version = "0.1.2"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
