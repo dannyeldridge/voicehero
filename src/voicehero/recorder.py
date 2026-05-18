@@ -138,16 +138,41 @@ class AudioRecorder:
         self.current_device_index: int | None = None
         self.current_device_name: str = ""
 
+        # Silence/dropout tracking
+        self._silence_threshold: float = 1e-4  # RMS below this = silent buffer
+        self._consecutive_silent_buffers: int = 0
+        self._max_consecutive_silent: int = 0
+        self._total_silent_buffers: int = 0
+        self._total_buffers: int = 0
+        self._status_errors: list[str] = []
+        self._silence_onset_buffer: int | None = None  # buffer index where current silence started
+
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """Callback for audio stream to capture audio data."""
         if status:
             logger = get_logger()
-            logger.warning(f"Audio callback status: {status}")
+            status_str = str(status)
+            logger.warning(f"Audio callback status: {status_str}")
+            self._status_errors.append(status_str)
             if self.debug:
-                console.print(f"[yellow]Audio status: {status}[/yellow]")
+                console.print(f"[yellow]Audio status: {status_str}[/yellow]")
 
         if self.recording:
             self.audio_data.append(indata.copy())
+            self._total_buffers += 1
+
+            # Silence detection
+            rms = np.sqrt(np.mean(indata ** 2))
+            if rms < self._silence_threshold:
+                self._consecutive_silent_buffers += 1
+                self._total_silent_buffers += 1
+                if self._silence_onset_buffer is None:
+                    self._silence_onset_buffer = self._total_buffers - 1
+                if self._consecutive_silent_buffers > self._max_consecutive_silent:
+                    self._max_consecutive_silent = self._consecutive_silent_buffers
+            else:
+                self._consecutive_silent_buffers = 0
+                self._silence_onset_buffer = None
 
     def activate_bluetooth_device(self) -> Optional[str]:
         """Activate Bluetooth device by doing a brief test recording.
@@ -274,6 +299,12 @@ class AudioRecorder:
         self.audio_data = []
         self.recording = True
         self.start_time = time.time()
+        self._consecutive_silent_buffers = 0
+        self._max_consecutive_silent = 0
+        self._total_silent_buffers = 0
+        self._total_buffers = 0
+        self._status_errors = []
+        self._silence_onset_buffer = None
 
         # Try to start the stream, with retry and fallback
         if not self._try_start_stream(self.current_device_index, self.current_device_name):
@@ -346,12 +377,81 @@ class AudioRecorder:
         if self.start_time:
             duration = time.time() - self.start_time
             samples = len(audio)
-            logger.info(f"Recording stopped: {samples} samples, {duration:.2f}s, RMS={np.sqrt(np.mean(audio**2)):.4f}")
+            overall_rms = np.sqrt(np.mean(audio ** 2))
+            logger.info(f"Recording stopped: {samples} samples, {duration:.2f}s, RMS={overall_rms:.4f}")
 
             if self.debug:
                 console.print(f"[blue]Recording stopped: {samples} samples, {duration:.2f}s[/blue]")
 
+        # Audio health diagnostics
+        self._log_audio_diagnostics(audio)
+
         return audio
+
+    def _log_audio_diagnostics(self, audio: np.ndarray) -> None:
+        """Log diagnostics about audio quality, silence regions, and callback errors."""
+        logger = get_logger()
+
+        total = self._total_buffers
+        silent = self._total_silent_buffers
+        max_silent = self._max_consecutive_silent
+        status_errors = self._status_errors
+
+        if total == 0:
+            return
+
+        silent_pct = (silent / total) * 100
+        is_bluetooth = is_bluetooth_device(self.current_device_name)
+
+        logger.info(
+            f"Audio diagnostics: {total} buffers, {silent} silent ({silent_pct:.1f}%), "
+            f"max consecutive silent: {max_silent}, status errors: {len(status_errors)}"
+        )
+
+        # Detect trailing silence (audio cutout pattern)
+        has_trailing_cutout = False
+        if len(self.audio_data) > 10:
+            # Check last 25% of buffers for silence
+            tail_start = len(self.audio_data) * 3 // 4
+            tail_silent = sum(
+                1 for chunk in self.audio_data[tail_start:]
+                if np.sqrt(np.mean(chunk ** 2)) < self._silence_threshold
+            )
+            tail_total = len(self.audio_data) - tail_start
+            tail_silent_pct = (tail_silent / tail_total) * 100
+            if tail_silent_pct > 80:
+                has_trailing_cutout = True
+                logger.warning(
+                    f"AUDIO CUTOUT DETECTED: last 25% of recording is {tail_silent_pct:.0f}% silent "
+                    f"(device: {self.current_device_name}, bluetooth: {is_bluetooth})"
+                )
+
+        if self.debug:
+            console.print(f"[dim]Audio health: {total} buffers, {silent} silent ({silent_pct:.1f}%)[/dim]")
+            console.print(f"[dim]Max consecutive silent buffers: {max_silent}[/dim]")
+
+            if status_errors:
+                console.print(f"[yellow]Callback status errors ({len(status_errors)}):[/yellow]")
+                # Deduplicate and count
+                from collections import Counter
+                for err, count in Counter(status_errors).items():
+                    console.print(f"[yellow]  {err} (x{count})[/yellow]")
+
+            if has_trailing_cutout:
+                console.print(
+                    f"[red]⚠ Audio cutout detected: recording went silent in the last 25%. "
+                    f"This is common with Bluetooth devices (AirPods) losing the HSP/HFP profile.[/red]"
+                )
+            elif silent_pct > 50:
+                console.print(f"[yellow]⚠ High silence ratio ({silent_pct:.0f}%) — check microphone connection[/yellow]")
+
+        # Reset counters
+        self._consecutive_silent_buffers = 0
+        self._max_consecutive_silent = 0
+        self._total_silent_buffers = 0
+        self._total_buffers = 0
+        self._status_errors = []
+        self._silence_onset_buffer = None
 
     def is_recording(self) -> bool:
         """Check if currently recording."""
