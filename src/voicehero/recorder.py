@@ -354,9 +354,21 @@ class AudioRecorder:
             stream = self.stream
             self.stream = None  # Clear reference first to prevent re-entry
 
-            _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
-            _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
+            stop_ok = _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
+            close_ok = _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
             logger.debug("Audio stream stopped and closed")
+
+            if not stop_ok or not close_ok:
+                # Stream operations timed out — the PortAudio subsystem is stuck.
+                # Reinitialize to ensure the next recording starts clean.
+                logger.warning("Reinitializing PortAudio after stream timeout")
+                try:
+                    sd._terminate()
+                    time.sleep(0.1)
+                    sd._initialize()
+                    logger.info("PortAudio reinitialized successfully")
+                except Exception as reinit_err:
+                    logger.error(f"Failed to reinitialize PortAudio: {reinit_err}")
 
         # Now set recording to False after stream is stopped
         self.recording = False

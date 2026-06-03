@@ -1,5 +1,6 @@
 """Hotkey listener for recording control."""
 
+import threading
 from typing import Callable
 
 from pynput import keyboard
@@ -71,6 +72,16 @@ class HotkeyListener:
         except AttributeError:
             return str(key).lower()
 
+    def _dispatch(self, callback: Callable, name: str) -> None:
+        """Run callback in a daemon thread so the listener thread is never blocked."""
+        def run():
+            try:
+                callback()
+                get_logger().debug(f"{name} callback completed")
+            except Exception as e:
+                get_logger().exception(f"Error in {name} callback: {e}")
+        threading.Thread(target=run, daemon=True).start()
+
     def _on_press(self, key) -> None:
         """Handle key press events."""
         key_name = self._get_key_name(key)
@@ -83,11 +94,7 @@ class HotkeyListener:
             logger = get_logger()
             logger.info(f"Hotkey PRESSED: {sorted(self.pressed_keys)}")
             self.was_active = True
-            try:
-                self.on_start()
-                logger.debug("on_start() callback completed")
-            except Exception as e:
-                logger.exception(f"Error in on_start() callback: {e}")
+            self._dispatch(self.on_start, "on_start()")
 
     def _on_release(self, key) -> None:
         """Handle key release events."""
@@ -101,11 +108,7 @@ class HotkeyListener:
             logger = get_logger()
             logger.info(f"Hotkey RELEASED: {sorted(self.pressed_keys)}")
             self.was_active = False
-            try:
-                self.on_stop()
-                logger.debug("on_stop() callback completed")
-            except Exception as e:
-                logger.exception(f"Error in on_stop() callback: {e}")
+            self._dispatch(self.on_stop, "on_stop()")
 
     def start(self) -> None:
         """Start listening for hotkeys."""
