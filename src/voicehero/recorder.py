@@ -138,6 +138,13 @@ class AudioRecorder:
         self.current_device_index: int | None = None
         self.current_device_name: str = ""
 
+        # The audio stream is persistent: opened once and kept running for the
+        # process lifetime. Recording is just a flag the callback honors. This
+        # serializes the (rare) open/reopen/close operations so we never tear
+        # PortAudio state out from under an in-flight call.
+        self._lock = threading.Lock()
+        self._stream_device_index: int | None = None  # device the open stream uses
+
         # Silence/dropout tracking
         self._silence_threshold: float = 1e-4  # RMS below this = silent buffer
         self._consecutive_silent_buffers: int = 0
@@ -174,158 +181,138 @@ class AudioRecorder:
                 self._consecutive_silent_buffers = 0
                 self._silence_onset_buffer = None
 
-    def activate_bluetooth_device(self) -> Optional[str]:
-        """Activate Bluetooth device by doing a brief test recording.
+    def _open_stream(self, device_index: int | None, device_name: str) -> None:
+        """Create and start the persistent input stream. Raises on failure.
 
-        This forces macOS to switch the Bluetooth profile from A2DP (audio output only)
-        to HSP/HFP (bidirectional audio with microphone support).
-
-        Returns:
-            Name of the activated device, or None if no activation was needed/performed.
+        Must be called under self._lock with no stream currently open.
         """
         logger = get_logger()
-        logger.debug("activate_bluetooth_device() called")
+        logger.debug(f"Opening stream: device={device_index} ({device_name})")
+        stream = sd.InputStream(
+            device=device_index,
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            dtype=self.dtype,
+            callback=self._audio_callback,
+        )
+        stream.start()
+        self.stream = stream
+        self._stream_device_index = device_index
+        self.current_device_index = device_index
+        self.current_device_name = device_name
+        logger.info(f"Stream started on {device_name}")
 
-        # Always force-refresh PortAudio to detect audio source changes.
-        # This ensures we pick up when the user switches input devices in macOS.
-        self.current_device_index, device_info = get_default_input_device(force_refresh=True)
-        self.current_device_name = device_info.get('name', '')
-        device_name = self.current_device_name
+    def _close_stream(self) -> None:
+        """Stop and close the persistent stream. Must be called under self._lock.
 
-        logger.info(f"Current input device: {device_name} (index: {self.current_device_index})")
+        This is a deliberate, rare operation (device switch or shutdown) — never
+        part of a normal record/stop cycle. Because it runs under the lock with no
+        other PortAudio call in flight, the reinit-while-stuck race that previously
+        wedged the subsystem cannot occur, so we never reinitialize PortAudio here.
+        """
+        if not self.stream:
+            return
+        logger = get_logger()
+        stream = self.stream
+        self.stream = None
+        self._stream_device_index = None
+        _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
+        _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
+        logger.debug("Audio stream closed")
 
-        # Not a Bluetooth device - no activation needed
-        if not is_bluetooth_device(device_name):
-            logger.debug(f"Device is not Bluetooth: {device_name}")
-            if self.debug:
-                console.print(f"[dim]Input device: {device_name} (not Bluetooth)[/dim]")
-            return None
+    def _ensure_stream(self) -> Optional[str]:
+        """Ensure the persistent stream is open on the current default device.
 
-        # Same Bluetooth device already activated - skip
-        if device_name == self.activated_bluetooth_device:
-            logger.debug(f"Bluetooth device already activated: {device_name}")
-            if self.debug:
-                console.print(f"[dim]Bluetooth device already activated: {device_name}[/dim]")
-            return self.activated_bluetooth_device
+        Opens the stream on first use and reopens it only when the default input
+        device actually changes (e.g. plugging in AirPods). The PortAudio device
+        list is refreshed only while no stream is open — a safe window — so we
+        pick up newly connected devices without disrupting a live stream.
 
-        # New or different Bluetooth device - need to activate
-        logger.info(f"Activating new Bluetooth device: {device_name}")
-        if self.debug:
-            console.print(f"[dim]Bluetooth device detected: {device_name}[/dim]")
-            console.print("[dim]Activating Bluetooth microphone profile...[/dim]")
-
-        try:
-            logger.debug("Creating Bluetooth test stream")
-            # Do a very brief recording to trigger the profile switch
-            test_stream = sd.InputStream(
-                device=self.current_device_index,
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype=self.dtype,
-                blocksize=1024,
-            )
-            logger.debug("Starting Bluetooth test stream")
-            test_stream.start()
-            logger.debug("Bluetooth test stream started, sleeping 0.3s")
-            time.sleep(0.3)  # Brief delay to allow profile switch
-
-            # Use timeouts to prevent hanging on Bluetooth issues
-            logger.debug("Stopping Bluetooth test stream")
-            _run_with_timeout(test_stream.stop, STREAM_TIMEOUT, "Bluetooth test stop")
-            logger.debug("Closing Bluetooth test stream")
-            _run_with_timeout(test_stream.close, STREAM_TIMEOUT, "Bluetooth test close")
-
-            self.activated_bluetooth_device = device_name
-            logger.info(f"Bluetooth device activated successfully: {device_name}")
-
-            if self.debug:
-                console.print("[dim]✓ Bluetooth microphone activated[/dim]")
-
-            return device_name
-
-        except Exception as e:
-            logger.exception(f"Failed to activate Bluetooth device: {e}")
-            if self.debug:
-                console.print(f"[yellow]Warning: Failed to pre-activate Bluetooth: {e}[/yellow]")
-            return None
-
-    def _try_start_stream(self, device_index: int | None, device_name: str) -> bool:
-        """Try to create and start an audio input stream.
-
-        Args:
-            device_index: PortAudio device index, or None for system default
-            device_name: Device name for logging
+        Must be called under self._lock.
 
         Returns:
-            True if stream started successfully
+            Name of the active device if it is Bluetooth, else None.
         """
         logger = get_logger()
-        logger.debug(f"Attempting stream start: device={device_index} ({device_name})")
+
+        device_index, device_info = get_default_input_device(force_refresh=self.stream is None)
+        device_name = device_info.get('name', '')
+        logger.info(f"Current input device: {device_name} (index: {device_index})")
+
+        if self.stream is not None and device_index == self._stream_device_index:
+            logger.debug("Reusing existing stream")
+        else:
+            if self.stream is not None:
+                logger.info(f"Input device changed to {device_name}; reopening stream")
+            self._open_with_fallback(device_index, device_name)
+
+        bluetooth = is_bluetooth_device(self.current_device_name)
+        if bluetooth:
+            self.activated_bluetooth_device = self.current_device_name
+        elif self.debug:
+            console.print(f"[dim]Input device: {self.current_device_name} (not Bluetooth)[/dim]")
+        return self.current_device_name if bluetooth else None
+
+    def _open_with_fallback(self, device_index: int | None, device_name: str) -> None:
+        """Open the stream, retrying with the system default before giving up."""
+        logger = get_logger()
+        self._close_stream()  # no-op if nothing open; clears any stale reference
         try:
-            self.stream = sd.InputStream(
-                device=device_index,
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype=self.dtype,
-                callback=self._audio_callback,
-            )
-            self.stream.start()
-            self.current_device_index = device_index
-            self.current_device_name = device_name
-            logger.info(f"Stream started on {device_name}")
-            return True
+            self._open_stream(device_index, device_name)
+            return
         except Exception as e:
-            logger.warning(f"Stream start failed on {device_name}: {e}")
+            logger.warning(f"Stream open failed on {device_name}: {e}")
+
+        # Retry once after letting CoreAudio settle, re-querying the device.
+        time.sleep(0.3)
+        device_index, device_info = get_default_input_device()
+        device_name = device_info.get('name', 'Unknown')
+        try:
+            self._open_stream(device_index, device_name)
+            return
+        except Exception as e:
+            logger.warning(f"Stream open retry failed on {device_name}: {e}")
+
+        # Final fallback: let PortAudio pick the default device.
+        logger.info("Falling back to system default device (device=None)")
+        try:
+            self._open_stream(None, "System Default")
+        except Exception as e:
             self.stream = None
-            return False
+            raise RuntimeError(
+                "Error starting stream: Internal PortAudio error [PaErrorCode -9986]\n"
+                "This usually means macOS cannot access the microphone.\n"
+                "Fix: System Settings → Privacy & Security → Microphone → enable your terminal app"
+            ) from e
 
     def start(self) -> Optional[str]:
         """Start recording audio.
 
+        The persistent stream stays running between recordings; this just opens it
+        on first use (or reopens it on a device change) and flips the recording flag.
+
         Returns:
-            Name of the activated Bluetooth device (if any), for session tracking.
+            Name of the active Bluetooth device (if any), for session tracking.
         """
         logger = get_logger()
         logger.info("=== RECORDING START ===")
 
-        if self.recording:
-            logger.error("Recording already in progress - cannot start new recording")
-            raise RuntimeError("Recording already in progress")
+        with self._lock:
+            if self.recording:
+                logger.error("Recording already in progress - cannot start new recording")
+                raise RuntimeError("Recording already in progress")
 
-        # Activate Bluetooth device if needed (checks if device changed)
-        logger.debug("Activating Bluetooth device (if needed)")
-        activated = self.activate_bluetooth_device()
+            activated = self._ensure_stream()
 
-        self.audio_data = []
-        self.recording = True
-        self.start_time = time.time()
-        self._consecutive_silent_buffers = 0
-        self._max_consecutive_silent = 0
-        self._total_silent_buffers = 0
-        self._total_buffers = 0
-        self._status_errors = []
-        self._silence_onset_buffer = None
-
-        # Try to start the stream, with retry and fallback
-        if not self._try_start_stream(self.current_device_index, self.current_device_name):
-            # Retry after a brief delay to let CoreAudio settle
-            logger.info("Retrying stream start after delay...")
-            time.sleep(0.3)
-
-            # Re-query devices in case indices changed
-            self.current_device_index, device_info = get_default_input_device()
-            self.current_device_name = device_info.get('name', 'Unknown')
-
-            if not self._try_start_stream(self.current_device_index, self.current_device_name):
-                # Final fallback: let PortAudio pick the default device
-                logger.info("Falling back to system default device (device=None)")
-                if not self._try_start_stream(None, "System Default"):
-                    self.recording = False
-                    raise RuntimeError(
-                        "Error starting stream: Internal PortAudio error [PaErrorCode -9986]\n"
-                        "This usually means macOS cannot access the microphone.\n"
-                        "Fix: System Settings → Privacy & Security → Microphone → enable your terminal app"
-                    )
+            self.audio_data = []
+            self._consecutive_silent_buffers = 0
+            self._max_consecutive_silent = 0
+            self._total_silent_buffers = 0
+            self._total_buffers = 0
+            self._status_errors = []
+            self._silence_onset_buffer = None
+            self.start_time = time.time()
+            self.recording = True  # flip last so the callback only collects now
 
         logger.info(f"Recording started successfully on {self.current_device_name}")
 
@@ -337,41 +324,22 @@ class AudioRecorder:
     def stop(self) -> np.ndarray:
         """Stop recording and return the audio data.
 
+        The stream is left running — only the recording flag is cleared, so the
+        callback stops collecting. No stream stop/close or PortAudio reinit happens
+        here, which is what previously hung after long sessions.
+
         Returns:
             Audio data as a numpy array
         """
         logger = get_logger()
         logger.info("=== RECORDING STOP ===")
 
-        if not self.recording:
-            logger.error("No recording in progress - cannot stop")
-            raise RuntimeError("No recording in progress")
-
-        # Stop and close the stream BEFORE setting recording=False
-        # This ensures all buffered audio chunks are processed by the callback
-        if self.stream:
-            logger.debug("Stopping audio stream")
-            stream = self.stream
-            self.stream = None  # Clear reference first to prevent re-entry
-
-            stop_ok = _run_with_timeout(stream.stop, STREAM_TIMEOUT, "stream stop")
-            close_ok = _run_with_timeout(stream.close, STREAM_TIMEOUT, "stream close")
-            logger.debug("Audio stream stopped and closed")
-
-            if not stop_ok or not close_ok:
-                # Stream operations timed out — the PortAudio subsystem is stuck.
-                # Reinitialize to ensure the next recording starts clean.
-                logger.warning("Reinitializing PortAudio after stream timeout")
-                try:
-                    sd._terminate()
-                    time.sleep(0.1)
-                    sd._initialize()
-                    logger.info("PortAudio reinitialized successfully")
-                except Exception as reinit_err:
-                    logger.error(f"Failed to reinitialize PortAudio: {reinit_err}")
-
-        # Now set recording to False after stream is stopped
-        self.recording = False
+        with self._lock:
+            if not self.recording:
+                logger.error("No recording in progress - cannot stop")
+                raise RuntimeError("No recording in progress")
+            # Flip the flag so the callback stops appending; the stream stays live.
+            self.recording = False
 
         # Combine all audio chunks
         logger.debug(f"Processing {len(self.audio_data)} audio chunks")
@@ -468,6 +436,12 @@ class AudioRecorder:
     def is_recording(self) -> bool:
         """Check if currently recording."""
         return self.recording
+
+    def close(self) -> None:
+        """Close the persistent audio stream. Call once on shutdown."""
+        with self._lock:
+            self.recording = False
+            self._close_stream()
 
     def save_debug_recording(self, audio: np.ndarray, recordings_dir: Path) -> None:
         """Save a debug recording to disk.

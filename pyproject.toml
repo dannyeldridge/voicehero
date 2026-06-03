@@ -1,6 +1,6 @@
 [project]
 name = "voicehero"
-version = "0.3.1"
+version = "0.4.0"
 description = "Voice-to-text transcription CLI using OpenAI's Whisper model"
 readme = "README.md"
 authors = [
@@ -25,3 +25,8 @@ voicehero = "voicehero.cli:app"
 [build-system]
 requires = ["uv_build>=0.8.21,<0.9.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

@@ -206,28 +206,27 @@ def run(
 
     console.print(f"[green]🎤 Ready! Hold {' + '.join(config.hotkey)} to record...[/green]\n")
 
-    # State management
-    recorder: AudioRecorder | None = None
+    # State management. The recorder is persistent: created once and reused for
+    # every recording so its audio stream stays open for the whole session.
+    recorder = AudioRecorder(debug=debug)
     is_transcribing = False
-    activated_bluetooth_device: str | None = None  # Track activated Bluetooth device across recordings
     session_word_count = 0  # Track total words transcribed in this session
 
     def on_start():
-        nonlocal recorder, is_transcribing, activated_bluetooth_device
+        nonlocal is_transcribing
 
         if debug:
             logger = get_logger()
             logger.info(">>> on_start() called")
-            logger.debug(f"State: is_transcribing={is_transcribing}, recorder={recorder is not None}")
+            logger.debug(f"State: is_transcribing={is_transcribing}, recording={recorder.is_recording()}")
 
-        if is_transcribing:
+        if is_transcribing or recorder.is_recording():
             if debug:
-                logger.debug("Skipping on_start - transcription in progress")
+                logger.debug("Skipping on_start - transcription in progress or already recording")
             return
 
         try:
-            recorder = AudioRecorder(debug=debug, activated_bluetooth_device=activated_bluetooth_device)
-            activated_bluetooth_device = recorder.start()
+            recorder.start()
             console.print("[red]🔴 Recording...[/red]")
         except Exception as e:
             if debug:
@@ -245,16 +244,16 @@ def run(
                 console.print(f"[red]Failed to start recording: {e}[/red]")
 
     def on_stop():
-        nonlocal recorder, is_transcribing, session_word_count
+        nonlocal is_transcribing, session_word_count
 
         if debug:
             logger = get_logger()
             logger.info(">>> on_stop() called")
-            logger.debug(f"State: recorder={recorder is not None}, is_transcribing={is_transcribing}")
+            logger.debug(f"State: recording={recorder.is_recording()}, is_transcribing={is_transcribing}")
 
-        if not recorder or is_transcribing:
+        if is_transcribing or not recorder.is_recording():
             if debug:
-                logger.debug(f"Skipping on_stop - recorder={recorder is not None}, is_transcribing={is_transcribing}")
+                logger.debug(f"Skipping on_stop - recording={recorder.is_recording()}, is_transcribing={is_transcribing}")
             return
 
         is_transcribing = True
@@ -263,7 +262,6 @@ def run(
 
         try:
             audio = recorder.stop()
-            recorder = None
 
             if len(audio) == 0:
                 console.print("[yellow]⚠️  No audio recorded[/yellow]\n")
@@ -329,8 +327,7 @@ def run(
 
                 # Save recording if requested
                 if save_recordings:
-                    recorder_temp = AudioRecorder(debug=debug)
-                    recorder_temp.save_debug_recording(audio, get_recordings_dir())
+                    recorder.save_debug_recording(audio, get_recordings_dir())
             else:
                 console.print("[yellow]⚠️  No speech detected[/yellow]\n")
                 if debug:
@@ -352,25 +349,21 @@ def run(
 
     # Handle Ctrl+C
     def signal_handler(sig, frame):
-        nonlocal recorder
-
         if debug:
             logger = get_logger()
             logger.info("=== SHUTDOWN INITIATED ===")
 
         console.print("\n\n[cyan]Goodbye![/cyan]")
 
-        # Stop any active recording first to release file handles
-        if recorder:
+        # Close the persistent audio stream to release the microphone.
+        if debug:
+            logger.debug("Closing audio stream")
+        try:
+            recorder.close()
+        except Exception as e:
             if debug:
-                logger.debug("Stopping active recorder")
-            try:
-                recorder.stop()
-            except Exception as e:
-                if debug:
-                    logger.error(f"Error stopping recorder during shutdown: {e}")
-                pass  # Ignore errors during shutdown
-            recorder = None
+                logger.error(f"Error closing recorder during shutdown: {e}")
+            pass  # Ignore errors during shutdown
 
         # Stop hotkey listener with timeout
         if debug:
