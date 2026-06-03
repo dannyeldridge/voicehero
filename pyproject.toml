@@ -1,6 +1,6 @@
 [project]
 name = "voicehero"
-version = "0.3.0"
+version = "0.3.1"
 description = "Voice-to-text transcription CLI using OpenAI's Whisper model"
 readme = "README.md"
 authors = [
