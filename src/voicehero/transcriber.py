@@ -1,6 +1,7 @@
 """Whisper transcription functionality."""
 
 import time
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -143,18 +144,20 @@ class AudioTranscriber:
         start_time = time.time()
 
         try:
-            segments, info = self.model.transcribe(
-                audio,
-                language=language,
-                beam_size=5,
-                vad_filter=True,  # Voice activity detection
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                ),
-            )
-
-            # Combine all segments into a single text
-            text = " ".join(segment.text.strip() for segment in segments)
+            # Suppress numerical warnings from faster_whisper's mel filterbank matmul
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning, module="faster_whisper")
+                segments, info = self.model.transcribe(
+                    audio,
+                    language=language,
+                    beam_size=5,
+                    vad_filter=True,  # Voice activity detection
+                    vad_parameters=dict(
+                        min_silence_duration_ms=500,
+                    ),
+                )
+                # Iterate inside the context: segments is a lazy generator
+                text = " ".join(segment.text.strip() for segment in segments)
             text = text.strip()
 
             elapsed = time.time() - start_time
